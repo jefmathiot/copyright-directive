@@ -1,0 +1,101 @@
+#! /usr/bin/env ruby
+
+require 'nokogiri'
+require 'csv'
+
+countries = { BE: 'Belgique', BG: 'Bulgarie', CZ: 'Tchéquie', DK: 'Danemark', DE: 'Allemagne',
+              IE: 'Irlande', GR: 'Grèce', ES: 'Espagne', EE: 'Estonie', FR: 'France',
+              HR: 'Croatie', IT: 'Italie', CY: 'Chypre', LV: 'Lettonie',
+              LT: 'Lituanie', LU: 'Luxembourg', HU: 'Hongrie',
+              MT: 'Malte', NL: 'Pays-Bas', AT: 'Autriche', PL: 'Pologne',
+              PT: 'Portugal', RO: 'Roumanie', SI: 'Slovénie', SK: 'Slovaquie',
+              FI: 'Finlande', SE: 'Suède', GB: 'Royaume-Uni' }
+base_url = 'http://www.europarl.europa.eu/meps/fr/download/advanced/xml'
+
+meps = {}
+homonyms = {
+  'Renate WEBER' => 'WEBER RENATE',
+  'Manfred WEBER' => 'WEBER MANFRED',
+  'Nathan GILL' => 'GILL NATHAN',
+  'Neena GILL' => 'GILL NEENA',
+  'Martina ANDERSON' => 'ANDERSON MARTINA',
+  'Lucy ANDERSON' => 'ANDERSON LUCY',
+  'Hermann WINKLER' => 'WINKLER HERMANN',
+  'Iuliu WINKLER' => 'WINKLER IULIU',
+  'Jan KELLER' => 'KELLER JAN',
+  'Ska KELLER' => 'KELLER SKA',
+  'Georg MAYER' => 'MAYER GEORG',
+  'Alex MAYER' => 'MAYER ALEX',
+  'Peter SIMON' => 'SIMON PETER',
+  'Siôn SIMON' => 'SIMON SIÔN',
+  'David MARTIN' => 'MARTIN DAVID',
+  'Edouard MARTIN' => 'MARTIN EDOUARD',
+  'Dominique MARTIN' => 'MARTIN DOMINIQUE',
+  'Esther de LANGE' => 'DE LANGE',
+  'Maria João RODRIGUES' => 'RODRIGUES MARIA',
+  'Liliana RODRIGUES' => 'RODRIGUES LILIANA',
+}
+countries.each do |code, country|
+  `curl -o #{code}.xml #{base_url}?countryCode=#{code}` \
+    unless File.exist?("#{code}.xml")
+  Nokogiri::XML(File.open("#{code}.xml")).xpath('//meps/mep').each do |mep|
+    parts = mep.xpath('fullName').text.split(' ').map do |part|
+      part.upcase != part ? nil : part
+    end.compact
+    if homonyms.key?(mep.xpath('fullName').text)
+      name = homonyms[mep.xpath('fullName').text]
+    else
+      name = if parts.size.zero?
+               mep.xpath('fullName').text.split(' ').drop(1).join(' ')
+             else
+               parts.join(' ')
+             end
+    end
+    meps[name.upcase] = { full_name: mep.xpath('fullName').text, country_code: code, country: country }
+  end
+end
+
+replacements = {
+  'de Jong' => 'JONG',
+  'Papadakis Konstantinos' => 'PAPADAKIS',
+  "in 't Veld" => 'VELD',
+  'van Miltenburg' => 'MILTENBURG',
+  'Tremosa i Balcells' => 'TREMOSA BALCELLS',
+  'van Dalen' => 'DALEN',
+  'Piecha' => 'G. PIECHA',
+  '(The Earl of) Dartmouth' => 'DARTMOUTH',
+  'Geringer de Oedenberg' => 'GERINGER OEDENBERG',
+  'van Baalen' => 'BAALEN',
+  'van Nistelrooij' => 'NISTELROOIJ',
+  'van de Camp' => 'CAMP',
+  'del Castillo Vera' => 'CASTILLO VERA',
+  'de Grandes Pascual' => 'GRANDES PASCUAL',
+  'dos Santos' => 'SANTOS',
+  'Becker' => 'K. BECKER'
+}
+
+
+%w[amendments adoption].each do |type|
+  results = {}
+  CSV.open("#{type}.csv", 'wb') do |csv|
+    %w[pro anti abstention].each do |camp|
+      base = "#{camp}-#{type}"
+      File.open("#{base}.txt").each_line do |line|
+        next if line.size.zero?
+        group, list = line.split(':')
+        list.split(',').map(&:strip).each do |name|
+          name = name.split(' ').compact.join(' ')
+          mep = meps[replacements[name] || name.upcase]
+          csv << [mep[:full_name], mep[:country_code], mep[:country], group, camp]
+          results[mep[:country_code]] ||= { 'pro' => 0, 'anti' => 0, 'abstention' => 0 }
+          results[mep[:country_code]][camp] += 1
+        end
+      end
+    end
+  end
+  puts "#{type}:"
+  puts "Pays, pro, anti, abstention"
+  results.each do |country, stats|
+    puts "#{countries[country]}, #{stats['pro']}, #{stats['anti']}, #{stats['abstention']}"
+  end
+end
